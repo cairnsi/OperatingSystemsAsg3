@@ -13,8 +13,10 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <unistd.h>   
+#include <signal.h>
 
 #define MAXINPUT 2048
+bool ignoreAmp = false;
 
 struct commandLine
 {
@@ -45,6 +47,7 @@ struct commandLine* createCommand(char* currLine)
     // Get the first element
     char* token = strtok_r(currLine, " ", &saveptr);
 
+    // parse command
     while (token != NULL) {
         //check for input output and background chars
         if (strcmp(token, "<") == 0) {
@@ -80,6 +83,59 @@ struct commandLine* createCommand(char* currLine)
     return command;
 }
 
+/* signal handler for sigint. Much of this was from the class signal handler module*/
+void handle_SIGINT(int signo) {
+    
+    
+}
+
+/* signal handler for SIGTSTP. Much of this was from the class signal handler module*/
+void handle_SIGTSTP(int signo) {
+    char* message; 
+    if (ignoreAmp) {
+        message = "\nExiting foreground-only mode\n";
+        write(STDOUT_FILENO, message, 30);
+        ignoreAmp = false;
+    }
+    else {
+        message = "\nEntering foreground-only mode (& is now ignored)\n";
+        write(STDOUT_FILENO, message, 50);
+        ignoreAmp = true;
+    }
+
+}
+
+/* register signal handlers*/
+void registerSigHandlers() {
+    // Initialize SIGINT_action struct to be empty
+    struct sigaction SIGINT_action = { { 0 } };
+
+    // Fill out the SIGINT_action struct
+    // Register handle_SIGINT as the signal handler
+    SIGINT_action.sa_handler = handle_SIGINT;
+    // Block all catchable signals while handle_SIGINT is running
+    sigfillset(&SIGINT_action.sa_mask);
+    // No flags set
+    SIGINT_action.sa_flags = 0;
+
+    // Install our signal handler
+    sigaction(SIGINT, &SIGINT_action, NULL);
+
+    // Initialize SIGTSTP_action struct to be empty
+    struct sigaction SIGTSTP_action = { { 0 } };
+
+    // Fill out the SIGTSTP_action struct
+    // Register handle_SIGTSTP as the signal handler
+    SIGTSTP_action.sa_handler = handle_SIGTSTP;
+    // Block all catchable signals while handle_SIGTSTP is running
+    sigfillset(&SIGTSTP_action.sa_mask);
+    // No flags set
+    SIGTSTP_action.sa_flags = 0;
+
+    // Install our signal handler
+    sigaction(SIGTSTP, &SIGTSTP_action, NULL);
+}
+
 /*
 *       main function for smallsh terminal
 *       this code will drive a terminal that will take in bash commmands and 
@@ -88,16 +144,35 @@ struct commandLine* createCommand(char* currLine)
 */
 int main(int argc, char* argv[])
 {
+    //set up status
+    char* status = calloc(15, sizeof(char));
+    strcpy(status, "exit value 0\n");
+    //register status
+    registerSigHandlers();
     bool askAgain = true;
     //run outer loop asking if user would like to specify a file
     do {
         printf(": ");
+        fflush(stdout);
         //allocate max input plus 1 for null at the end
         char* input = calloc(MAXINPUT+1, sizeof(char));
         fgets(input, MAXINPUT, stdin);
         struct commandLine* command = createCommand(input);
+        if (command->arguments[0] != NULL && command->arguments[0][0] != '#') {
+            if (strcmp(command->arguments[0], "exit") == 0) {
+                askAgain = false;
+            }
+            else if (strcmp(command->arguments[0], "status") == 0) {
+                printf(status);
+                fflush(stdout);
+            }
+            else if (strcmp(command->arguments[0], "cd") == 0) {
 
-        askAgain = false;
+            }
+            else {
+
+            }
+        }
         free(input);
     } while (askAgain);
     
