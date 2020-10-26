@@ -14,6 +14,7 @@
 #include <sys/stat.h>
 #include <unistd.h>   
 #include <signal.h>
+#include <sys/wait.h> // for waitpid
 
 #define MAXINPUT 2048
 bool ignoreAmp = false;
@@ -95,11 +96,13 @@ void handle_SIGTSTP(int signo) {
     if (ignoreAmp) {
         message = "\nExiting foreground-only mode\n";
         write(STDOUT_FILENO, message, 30);
+        fflush(stdout);
         ignoreAmp = false;
     }
     else {
         message = "\nEntering foreground-only mode (& is now ignored)\n";
         write(STDOUT_FILENO, message, 50);
+        fflush(stdout);
         ignoreAmp = true;
     }
 
@@ -136,6 +139,39 @@ void registerSigHandlers() {
     sigaction(SIGTSTP, &SIGTSTP_action, NULL);
 }
 
+/*run command*/
+void runCommand(struct commandLine* command, char* status) {
+    int childStatus;
+
+    // Fork a new process
+    pid_t spawnPid = fork();
+
+    switch (spawnPid) {
+    case -1:
+        break;
+    case 0:
+        execvp(command->arguments[0], command->arguments);
+        
+        exit(EXIT_FAILURE);
+        break;
+    default:
+        // In the parent process
+        // Wait for child's termination
+        spawnPid = waitpid(spawnPid, &childStatus, 0);
+        if (childStatus == 0) {
+            free(status);
+            status = calloc(15, sizeof(char));
+            strcpy(status, "exit value 0\n");
+        }
+        else {
+            free(status);
+            status = calloc(15, sizeof(char));
+            strcpy(status, "exit value 1\n");
+        }
+        break;
+    }
+}
+
 /*
 *       main function for smallsh terminal
 *       this code will drive a terminal that will take in bash commmands and 
@@ -170,7 +206,7 @@ int main(int argc, char* argv[])
 
             }
             else {
-
+                runCommand(command, status);
             }
         }
         free(input);
