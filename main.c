@@ -63,7 +63,7 @@ struct commandLine* createCommand(char* currLine)
             command->outputFile = calloc(strlen(token) + 1, sizeof(char));
             strcpy(command->outputFile, token);
         }
-        else if (strcmp(token, "&") == 0) {
+        else if (strcmp(token, "&") == 0 && !ignoreAmp) {
             //set the background boolean
             command->background = true;
         }
@@ -87,7 +87,6 @@ struct commandLine* createCommand(char* currLine)
 /* signal handler for sigint. Much of this was from the class signal handler module*/
 void handle_SIGINT(int signo) {
     
-    
 }
 
 /* signal handler for SIGTSTP. Much of this was from the class signal handler module*/
@@ -105,7 +104,6 @@ void handle_SIGTSTP(int signo) {
         fflush(stdout);
         ignoreAmp = true;
     }
-
 }
 
 /* register signal handlers*/
@@ -120,6 +118,7 @@ void registerSigHandlers() {
     sigfillset(&SIGINT_action.sa_mask);
     // No flags set
     SIGINT_action.sa_flags = 0;
+    SIGINT_action.sa_flags = SA_RESTART;
 
     // Install our signal handler
     sigaction(SIGINT, &SIGINT_action, NULL);
@@ -134,22 +133,39 @@ void registerSigHandlers() {
     sigfillset(&SIGTSTP_action.sa_mask);
     // No flags set
     SIGTSTP_action.sa_flags = 0;
+    SIGTSTP_action.sa_flags = SA_RESTART;
+
+    // Install our signal handler
+    sigaction(SIGTSTP, &SIGTSTP_action, NULL);
+}
+
+
+/* set ignor control z*/
+void ignorControlZ() {
+    struct sigaction SIGTSTP_action = { { 0 } };
+    // Fill out the SIGTSTP_action struct
+    // Register ignor as the signal handler
+    SIGTSTP_action.sa_handler = SIG_IGN;
+    // Block all catchable signals while handle_SIGTSTP is running
+    sigfillset(&SIGTSTP_action.sa_mask);
+    // No flags set
+    SIGTSTP_action.sa_flags = 0;
 
     // Install our signal handler
     sigaction(SIGTSTP, &SIGTSTP_action, NULL);
 }
 
 /*run command*/
-void runCommand(struct commandLine* command, char* status) {
+void runCommand(struct commandLine* command, char** status) {
     int childStatus;
 
     // Fork a new process
     pid_t spawnPid = fork();
-
     switch (spawnPid) {
     case -1:
         break;
     case 0:
+        ignorControlZ();
         execvp(command->arguments[0], command->arguments);
         
         exit(EXIT_FAILURE);
@@ -159,14 +175,21 @@ void runCommand(struct commandLine* command, char* status) {
         // Wait for child's termination
         spawnPid = waitpid(spawnPid, &childStatus, 0);
         if (childStatus == 0) {
-            free(status);
-            status = calloc(15, sizeof(char));
-            strcpy(status, "exit value 0\n");
+            free(*status);
+            *status = calloc(15, sizeof(char));
+            strcpy(*status, "exit value 0\n");
+        }
+        else if (childStatus == 2) {
+            printf("terminated by signal 2\n");
+            fflush(stdout);
+            free(*status);
+            *status = calloc(23, sizeof(char));
+            strcpy(*status, "terminated by signal 2\n");
         }
         else {
-            free(status);
-            status = calloc(15, sizeof(char));
-            strcpy(status, "exit value 1\n");
+            free(*status);
+            *status = calloc(15, sizeof(char));
+            strcpy(*status, "exit value 1\n");
         }
         break;
     }
@@ -180,9 +203,13 @@ void runCommand(struct commandLine* command, char* status) {
 */
 int main(int argc, char* argv[])
 {
+    char* varName = "$";
+    // We set the value of MYVAR to foo in the parent process
+    setenv(varName, "1687", 1);
     //set up status
-    char* status = calloc(15, sizeof(char));
-    strcpy(status, "exit value 0\n");
+    char** status = malloc(sizeof(char*));
+    *status = calloc(15, sizeof(char));
+    strcpy(*status, "exit value 0\n");
     //register status
     registerSigHandlers();
     bool askAgain = true;
@@ -199,11 +226,16 @@ int main(int argc, char* argv[])
                 askAgain = false;
             }
             else if (strcmp(command->arguments[0], "status") == 0) {
-                printf(status);
+                printf(*status);
                 fflush(stdout);
             }
             else if (strcmp(command->arguments[0], "cd") == 0) {
-
+                if (command->arguments[1] == NULL) {
+                    chdir(getenv("HOME"));
+                }
+                else {
+                    chdir(command->arguments[1]);
+                }
             }
             else {
                 runCommand(command, status);
