@@ -27,6 +27,48 @@ struct commandLine
     char* outputFile;
 };
 
+/*expand the $$ variable*/
+char* expandVariable(char* input) {
+    //get the pid and convert to a string
+    int pid = getpid();
+    char* buffer = calloc(30, sizeof(char));
+    sprintf(buffer, "%d", pid);
+    int bufferLength = strlen(buffer);
+
+    // look through the string and replace the $$. If found look again.
+    bool lookagain = true;
+    while (lookagain) {
+        int inputLength = strlen(input);
+        char* ptr = input;
+        lookagain = false;
+        //loop till you reach the end of the string
+        while (*(ptr + 1) != 0) {
+            //check if you reached $$
+            if (*ptr == '$' && *(ptr + 1) == '$') {
+                //if found look again
+                lookagain = true;
+                //set the $ to 0 for string cat
+                *ptr = 0;
+                *(ptr + 1) = 0;
+                // create new string with the size of the input plus the pid plus the null char
+                char* temp = calloc((bufferLength + inputLength - 1), sizeof(char));
+                //concat the string together
+                strcat(temp, input);
+                strcat(temp, buffer);
+                strcat(temp, ptr + 2);
+                //release the old input memory
+                free(input);
+                input = temp;
+                break;
+            }
+            // look at the next set of two characters
+            ptr++;
+        }
+    }
+    free(buffer);
+    return input;
+}
+
 /* Parse the current line
 */
 struct commandLine* createCommand(char* currLine)
@@ -56,12 +98,14 @@ struct commandLine* createCommand(char* currLine)
             token = strtok_r(NULL, " ", &saveptr);
             command->inputFile = calloc(strlen(token) + 1, sizeof(char));
             strcpy(command->inputFile, token);
+            command->inputFile = expandVariable(command->inputFile);
         }
         else if (strcmp(token, ">") == 0) {
             //get the file name and set it as the output file
             token = strtok_r(NULL, " ", &saveptr);
             command->outputFile = calloc(strlen(token) + 1, sizeof(char));
             strcpy(command->outputFile, token);
+            command->outputFile = expandVariable(command->outputFile);
         }
         else if (strcmp(token, "&") == 0 && !ignoreAmp) {
             //set the background boolean
@@ -71,6 +115,7 @@ struct commandLine* createCommand(char* currLine)
             // if not tags caught, then it is an argument. Add it to the arguments array
             command->arguments[index] = calloc(strlen(token) + 1, sizeof(char));
             strcpy(command->arguments[index], token);
+            command->arguments[index] = expandVariable(command->arguments[index]);
             index++;
         }
 
