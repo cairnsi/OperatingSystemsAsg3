@@ -203,13 +203,55 @@ void ignorControlZ() {
 /*run command*/
 void runCommand(struct commandLine* command, char** status) {
     int childStatus;
+    int inputFile;
+    if (command->inputFile != NULL) {
+        // Open input file if it exists
+        inputFile = open(command->inputFile, O_RDONLY);
+        if (inputFile == -1) {
+            printf("cannot open \"%s\" for input\n", command->inputFile);
+            fflush(stdout);
+            free(*status);
+            *status = calloc(15, sizeof(char));
+            strcpy(*status, "exit value 1\n");
+            return;
+        }
+    }
 
+    int outputFile;
+    if (command->outputFile != NULL) {
+        // Open input file if it exists
+        outputFile = open(command->outputFile, O_WRONLY | O_CREAT | O_TRUNC, 0640);
+        if (outputFile == -1) {
+            printf("cannot open \"%s\" for output\n", command->outputFile);
+            fflush(stdout);
+            free(*status);
+            *status = calloc(15, sizeof(char));
+            strcpy(*status, "exit value 1\n");
+            return;
+        }
+    }
     // Fork a new process
     pid_t spawnPid = fork();
     switch (spawnPid) {
     case -1:
         break;
     case 0:
+        if (command->inputFile != NULL) {
+            int result = dup2(inputFile, 0);
+            if (result == -1) {
+                printf("cannot set stdin to \"%s\"\n", command->inputFile);
+                fflush(stdout);
+                exit(EXIT_FAILURE);
+            }
+        }
+        if (command->outputFile != NULL) {
+            int result = dup2(outputFile, 1);
+            if (result == -1) {
+                printf("cannot set stdout to \"%s\"\n", command->inputFile);
+                fflush(stdout);
+                exit(EXIT_FAILURE);
+            }
+        }
         ignorControlZ();
         execvp(command->arguments[0], command->arguments);
         
