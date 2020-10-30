@@ -17,7 +17,10 @@
 #include <sys/wait.h> // for waitpid
 
 #define MAXINPUT 2048
+#define MAXBGPROCESSES 200
 bool ignoreAmp = false;
+bool midPrompt = false;
+
 
 struct commandLine
 {
@@ -107,7 +110,7 @@ struct commandLine* createCommand(char* currLine)
             strcpy(command->outputFile, token);
             command->outputFile = expandVariable(command->outputFile);
         }
-        else if (strcmp(token, "&") == 0 && !ignoreAmp) {
+        else if (strcmp(token, "&") == 0) {
             //set the background boolean
             command->background = true;
         }
@@ -148,6 +151,11 @@ void handle_SIGTSTP(int signo) {
         write(STDOUT_FILENO, message, 50);
         fflush(stdout);
         ignoreAmp = true;
+    }
+    if (midPrompt) {
+        message = ": ";
+        write(STDOUT_FILENO, message, 2);
+        fflush(stdout);
     }
 }
 
@@ -200,8 +208,24 @@ void ignorControlZ() {
     sigaction(SIGTSTP, &SIGTSTP_action, NULL);
 }
 
+/* set ignor control c*/
+void ignorControlC() {
+    struct sigaction SIGINT_action = { { 0 } };
+    // Fill out the SIGTSTP_action struct
+    // Register ignor as the signal handler
+    SIGINT_action.sa_handler = SIG_IGN;
+    // Block all catchable signals while handle_SIGTSTP is running
+    sigfillset(&SIGINT_action.sa_mask);
+    // No flags set
+    SIGINT_action.sa_flags = 0;
+
+    // Install our signal handler
+    sigaction(SIGINT, &SIGINT_action, NULL);
+}
+
+
 /*run command*/
-void runCommand(struct commandLine* command, char** status) {
+void runCommand(struct commandLine* command, char** status, int* backgroundProcess, struct commandLine** backgroundCommand) {
     int childStatus;
     int inputFile;
     if (command->inputFile != NULL) {
@@ -252,12 +276,27 @@ void runCommand(struct commandLine* command, char** status) {
                 exit(EXIT_FAILURE);
             }
         }
+        if (command->background && !ignoreAmp) {
+            ignorControlC();
+        }
+
         ignorControlZ();
         execvp(command->arguments[0], command->arguments);
-        
         exit(EXIT_FAILURE);
         break;
     default:
+        if (command->background && !ignoreAmp) {
+            printf("background pid is %d\n", spawnPid);
+            fflush(stdout);
+            for (int i = 0; i < MAXBGPROCESSES; i++) {
+                if (backgroundProcess[i] == 0) {
+                    backgroundProcess[i] = spawnPid;
+                    backgroundCommand[i] = command;
+                    break;
+                }
+            }
+            break;
+        }
         // In the parent process
         // Wait for child's termination
         spawnPid = waitpid(spawnPid, &childStatus, 0);
@@ -273,12 +312,53 @@ void runCommand(struct commandLine* command, char** status) {
             *status = calloc(23, sizeof(char));
             strcpy(*status, "terminated by signal 2\n");
         }
+        else if (childStatus == 256) {
+            printf("%s: no such file or directory\n", command->arguments[0]);
+            fflush(stdout);
+            free(*status);
+            *status = calloc(15, sizeof(char));
+            strcpy(*status, "exit value 1\n");
+        }
         else {
             free(*status);
             *status = calloc(15, sizeof(char));
             strcpy(*status, "exit value 1\n");
         }
         break;
+    }
+}
+
+/* Check background commands*/
+void checkBackgroundCommands(int* backgroundProcess, struct commandLine** backgroundCommand, char** status) {
+    int childStatus;
+    for (int i = 0; i < MAXBGPROCESSES; i++) {
+        if (backgroundProcess[i] != 0) {
+            int waitStatus = waitpid(backgroundProcess[i], &childStatus, WNOHANG);
+            struct commandLine* command = backgroundCommand[i];
+            if (waitStatus > 0) {
+                if (childStatus == 256) {
+                    printf("%s: no such file or directory\n", command->arguments[0]);
+                    fflush(stdout);
+                    free(*status);
+                    *status = calloc(15, sizeof(char));
+                    strcpy(*status, "exit value 1\n");
+                    backgroundProcess[i] = 0;
+                    backgroundCommand[i] = NULL;
+                }
+                else if (childStatus != 0) {
+                    printf("background pid %d is done: terminated by signal %d\n", backgroundProcess[i], childStatus);
+                    fflush(stdout);
+                    backgroundProcess[i] = 0;
+                    backgroundCommand[i] = NULL;
+                }
+                else {
+                    printf("background pid %d is done : exit value 0\n", backgroundProcess[i]);
+                    fflush(stdout);
+                    backgroundProcess[i] = 0;
+                    backgroundCommand[i] = NULL;
+                }
+            }
+        }
     }
 }
 
@@ -290,9 +370,9 @@ void runCommand(struct commandLine* command, char** status) {
 */
 int main(int argc, char* argv[])
 {
-    char* varName = "$";
-    // We set the value of MYVAR to foo in the parent process
-    setenv(varName, "1687", 1);
+    //set up array for storing background processes
+    int* backgroundProcess = calloc(MAXBGPROCESSES, sizeof(int));
+    struct commandLine** backgroundCommand = calloc(MAXBGPROCESSES, sizeof(struct commandLine*));
     //set up status
     char** status = malloc(sizeof(char*));
     *status = calloc(15, sizeof(char));
@@ -306,7 +386,9 @@ int main(int argc, char* argv[])
         fflush(stdout);
         //allocate max input plus 1 for null at the end
         char* input = calloc(MAXINPUT+1, sizeof(char));
+        midPrompt = true;
         fgets(input, MAXINPUT, stdin);
+        midPrompt = false;
         struct commandLine* command = createCommand(input);
         if (command->arguments[0] != NULL && command->arguments[0][0] != '#') {
             if (strcmp(command->arguments[0], "exit") == 0) {
@@ -325,10 +407,12 @@ int main(int argc, char* argv[])
                 }
             }
             else {
-                runCommand(command, status);
+                runCommand(command, status, backgroundProcess, backgroundCommand);
             }
         }
         free(input);
+        checkBackgroundCommands(backgroundProcess, backgroundCommand, status);
+
     } while (askAgain);
     
 
